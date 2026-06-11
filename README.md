@@ -21,11 +21,23 @@ npm run dev
 ### 发布线上展示快照
 
 1. 在本地页面完成记录。
-2. 进入“设置”，点击“导出备份 JSON”。
-3. 用导出的 JSON 内容替换 `public/workbench-data.json`。
-4. 提交并推送到 GitHub，Vercel 重新部署后，线上页面会展示这份快照。
+2. 进入“设置”，点击“导出备份 JSON”，保存到桌面或桌面的子文件夹。
+3. 在项目目录运行：
+
+```bash
+npm run snapshot:sync
+```
+
+4. 脚本会自动扫描桌面及子文件夹中最新的 `teacher-workbench-*.json`，并替换 `public/workbench-data.json`。
+5. 提交并推送到 GitHub，Vercel 重新部署后，线上页面会展示这份快照。
 
 线上页面不会新增、编辑、删除记录；它只展示发布时的快照。
+
+如果导出文件放在其他文件夹，可以直接运行脚本并指定路径：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\sync-snapshot.ps1 -SourceDir "D:\你的文件夹"
+```
 
 ## 当前功能
 
