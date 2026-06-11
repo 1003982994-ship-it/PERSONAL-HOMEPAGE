@@ -7,6 +7,7 @@ interface RecordListProps {
   onEdit: (record: WorkRecord) => void;
   onDelete: (id: string) => void;
   onComplete: (id: string) => void;
+  readOnly?: boolean;
 }
 
 const priorityClass = {
@@ -15,7 +16,7 @@ const priorityClass = {
   高: "priority-high",
 };
 
-export function RecordList({ records, emptyText = "暂无记录", onEdit, onDelete, onComplete }: RecordListProps) {
+export function RecordList({ records, emptyText = "暂无记录", onEdit, onDelete, onComplete, readOnly = false }: RecordListProps) {
   if (records.length === 0) {
     return <div className="empty-state">{emptyText}</div>;
   }
@@ -47,17 +48,19 @@ export function RecordList({ records, emptyText = "暂无记录", onEdit, onDele
             {record.notes && <p className="record-notes">备注：{record.notes}</p>}
           </div>
 
-          <div className="record-actions">
-            <button className="icon-button" type="button" onClick={() => onComplete(record.id)} title="标记完成">
-              完成
-            </button>
-            <button className="icon-button" type="button" onClick={() => onEdit(record)} title="编辑">
-              编辑
-            </button>
-            <button className="icon-button danger" type="button" onClick={() => onDelete(record.id)} title="删除">
-              删除
-            </button>
-          </div>
+          {!readOnly && (
+            <div className="record-actions">
+              <button className="icon-button" type="button" onClick={() => onComplete(record.id)} title="标记完成">
+                完成
+              </button>
+              <button className="icon-button" type="button" onClick={() => onEdit(record)} title="编辑">
+                编辑
+              </button>
+              <button className="icon-button danger" type="button" onClick={() => onDelete(record.id)} title="删除">
+                删除
+              </button>
+            </div>
+          )}
         </article>
       ))}
     </div>

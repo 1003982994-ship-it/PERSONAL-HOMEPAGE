@@ -3,7 +3,6 @@ import type { BackupMetadata, WeeklySummaries, WorkRecord } from "../types";
 const STORAGE_KEY = "teacher-workbench.records.v1";
 const WEEKLY_SUMMARY_KEY = "teacher-workbench.weekly-summaries.v1";
 const BACKUP_METADATA_KEY = "teacher-workbench.backup-metadata.v1";
-const SYNC_TOKEN_KEY = "teacher-workbench.sync-token.v1";
 
 export interface WorkbenchBackup {
   records: WorkRecord[];
@@ -60,57 +59,4 @@ export function loadBackupMetadata(): BackupMetadata | null {
 
 export function saveBackupMetadata(metadata: BackupMetadata): void {
   localStorage.setItem(BACKUP_METADATA_KEY, JSON.stringify(metadata));
-}
-
-export function loadSyncToken(): string {
-  try {
-    return localStorage.getItem(SYNC_TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-export function saveSyncToken(token: string): void {
-  localStorage.setItem(SYNC_TOKEN_KEY, token);
-}
-
-export async function loadCloudBackup(syncToken: string): Promise<WorkbenchBackup | null> {
-  const response = await fetch("/api/workbench", {
-    headers: syncToken ? { Authorization: `Bearer ${syncToken}` } : undefined,
-  });
-
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "云端数据读取失败");
-  }
-
-  const data = await response.json();
-  if (!data || typeof data !== "object") return null;
-
-  return {
-    records: Array.isArray(data.records) ? data.records : [],
-    weeklySummaries: data.weeklySummaries && typeof data.weeklySummaries === "object" && !Array.isArray(data.weeklySummaries) ? data.weeklySummaries : {},
-    backupMetadata: data.backupMetadata || null,
-  };
-}
-
-export async function saveCloudBackupToEndpoint(backup: WorkbenchBackup, syncToken: string, endpoint = "/api/workbench"): Promise<void> {
-  const response = await fetch(endpoint, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      ...(syncToken ? { Authorization: `Bearer ${syncToken}` } : {}),
-    },
-    body: JSON.stringify(backup),
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "云端数据保存失败");
-  }
-}
-
-export async function saveCloudBackup(backup: WorkbenchBackup, syncToken: string): Promise<void> {
-  return saveCloudBackupToEndpoint(backup, syncToken);
 }

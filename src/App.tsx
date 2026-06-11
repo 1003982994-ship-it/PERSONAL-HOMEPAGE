@@ -10,28 +10,15 @@ import type { BackupMetadata, RecordFilters, ViewKey, WeeklySummaries, WorkRecor
 import { calculateAcademicWeek, getAcademicWeekInfoForDate, getAcademicWeeks } from "./utils/academicCalendar";
 import { COURSE_SCHEDULE_PRESETS, buildCourseScheduleRecord, getCourseScheduleKey } from "./utils/courseSchedule";
 import { addDays, endOfWeek, formatChineseDate, getWeekday, isDateWithin, isSameDay, parseLocalDate, startOfWeek, toDateInputValue } from "./utils/date";
-import {
-  loadBackupMetadata,
-  loadCloudBackup,
-  loadRecords,
-  loadSyncToken,
-  loadWeeklySummaries,
-  saveBackupMetadata,
-  saveCloudBackup,
-  saveCloudBackupToEndpoint,
-  saveRecords,
-  saveSyncToken,
-  saveWeeklySummaries,
-} from "./utils/storage";
+import { loadBackupMetadata, loadRecords, loadWeeklySummaries, saveBackupMetadata, saveRecords, saveWeeklySummaries, type WorkbenchBackup } from "./utils/storage";
 import { getRecordTypeClass } from "./utils/recordStyle";
 
 type DraftRecord = Omit<WorkRecord, "id" | "createdAt" | "updatedAt">;
-type CloudSyncStatus = "local" | "loading" | "ready" | "saving" | "saved" | "error";
+type SnapshotStatus = "local" | "loading" | "ready" | "missing" | "error";
 
 const todayValue = toDateInputValue(new Date());
 const currentWeek = calculateAcademicWeek(todayValue);
 const currentWeekInfo = getAcademicWeekInfoForDate(todayValue);
-const DEFAULT_ONLINE_API_URL = "https://personal-homepage-omega-blush.vercel.app/api/workbench";
 
 const initialFilters: RecordFilters = {
   date: "",
@@ -70,18 +57,17 @@ function countWeeklySummaries(summaries: WeeklySummaries): number {
   return Object.values(summaries).filter((summary) => summary.trim().length > 0).length;
 }
 
-function shouldUseCloudSync(): boolean {
+function isLocalWorkbench(): boolean {
   if (typeof window === "undefined") return false;
-  return !["localhost", "127.0.0.1"].includes(window.location.hostname);
+  return ["localhost", "127.0.0.1"].includes(window.location.hostname);
 }
 
-function getCloudSyncLabel(status: CloudSyncStatus): string {
-  if (status === "local") return "本地模式";
-  if (status === "loading") return "正在读取云端";
-  if (status === "ready") return "云端已连接";
-  if (status === "saving") return "正在保存云端";
-  if (status === "saved") return "云端已保存";
-  return "云端同步异常";
+function getSnapshotStatusLabel(status: SnapshotStatus): string {
+  if (status === "local") return "本地编辑模式";
+  if (status === "loading") return "正在读取展示快照";
+  if (status === "ready") return "展示快照已加载";
+  if (status === "missing") return "尚未发布展示快照";
+  return "展示快照读取失败";
 }
 
 function formatDateTime(value: string): string {
@@ -167,88 +153,67 @@ function summarizeCourses(sourceRecords: WorkRecord[]) {
 }
 
 function App() {
-  const [records, setRecords] = useState<WorkRecord[]>(() => sortRecords(loadRecords()));
-  const [weeklySummaries, setWeeklySummaries] = useState<WeeklySummaries>(() => loadWeeklySummaries());
-  const [backupMetadata, setBackupMetadata] = useState<BackupMetadata | null>(() => loadBackupMetadata());
-  const [syncToken, setSyncToken] = useState(() => loadSyncToken());
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>(() => (shouldUseCloudSync() ? "loading" : "local"));
-  const [cloudSyncError, setCloudSyncError] = useState("");
-  const [cloudSyncReady, setCloudSyncReady] = useState(false);
-  const [onlineApiUrl, setOnlineApiUrl] = useState(DEFAULT_ONLINE_API_URL);
+  const isPublishedView = useMemo(() => !isLocalWorkbench(), []);
+  const [records, setRecords] = useState<WorkRecord[]>(() => (isLocalWorkbench() ? sortRecords(loadRecords()) : []));
+  const [weeklySummaries, setWeeklySummaries] = useState<WeeklySummaries>(() => (isLocalWorkbench() ? loadWeeklySummaries() : {}));
+  const [backupMetadata, setBackupMetadata] = useState<BackupMetadata | null>(() => (isLocalWorkbench() ? loadBackupMetadata() : null));
+  const [snapshotStatus, setSnapshotStatus] = useState<SnapshotStatus>(() => (isLocalWorkbench() ? "local" : "loading"));
+  const [snapshotError, setSnapshotError] = useState("");
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [filters, setFilters] = useState<RecordFilters>(initialFilters);
   const [editingRecord, setEditingRecord] = useState<WorkRecord | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(todayValue.slice(0, 7));
   const [selectedWeekId, setSelectedWeekId] = useState(currentWeekInfo.id);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const cloudSaveTimerRef = useRef<number | null>(null);
-  const cloudSyncEnabled = useMemo(() => shouldUseCloudSync(), []);
 
   useEffect(() => {
+    if (isPublishedView) return;
     saveRecords(records);
-  }, [records]);
+  }, [isPublishedView, records]);
 
   useEffect(() => {
+    if (isPublishedView) return;
     saveWeeklySummaries(weeklySummaries);
-  }, [weeklySummaries]);
+  }, [isPublishedView, weeklySummaries]);
 
   useEffect(() => {
-    saveSyncToken(syncToken);
-  }, [syncToken]);
-
-  useEffect(() => {
-    if (!cloudSyncEnabled) return;
+    if (!isPublishedView) return;
 
     let cancelled = false;
-    setCloudSyncReady(false);
-    setCloudSyncStatus("loading");
-    setCloudSyncError("");
+    setSnapshotStatus("loading");
+    setSnapshotError("");
 
-    loadCloudBackup(syncToken)
-      .then((backup) => {
+    fetch("/workbench-data.json", { cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("展示快照读取失败");
+        return (await response.json()) as Partial<WorkbenchBackup>;
+      })
+      .then((snapshot) => {
         if (cancelled) return;
-        if (backup) {
-          setRecords(sortRecords(backup.records));
-          setWeeklySummaries(backup.weeklySummaries);
-          setBackupMetadata(backup.backupMetadata);
-          if (backup.backupMetadata) saveBackupMetadata(backup.backupMetadata);
+        if (!snapshot || !Array.isArray(snapshot.records)) {
+          setRecords([]);
+          setWeeklySummaries({});
+          setBackupMetadata(null);
+          setSnapshotStatus("missing");
+          return;
         }
-        setCloudSyncReady(true);
-        setCloudSyncStatus("ready");
+
+        setRecords(sortRecords(snapshot.records));
+        setWeeklySummaries(snapshot.weeklySummaries && typeof snapshot.weeklySummaries === "object" && !Array.isArray(snapshot.weeklySummaries) ? snapshot.weeklySummaries : {});
+        setBackupMetadata(snapshot.backupMetadata || null);
+        setSnapshotStatus("ready");
       })
       .catch((error) => {
         if (cancelled) return;
-        setCloudSyncReady(false);
-        setCloudSyncStatus("error");
-        setCloudSyncError(error instanceof Error ? error.message : "云端数据读取失败");
+        setSnapshotStatus("error");
+        setSnapshotError(error instanceof Error ? error.message : "展示快照读取失败");
       });
 
     return () => {
       cancelled = true;
     };
-  }, [cloudSyncEnabled, syncToken]);
-
-  useEffect(() => {
-    if (!cloudSyncEnabled || !cloudSyncReady) return;
-    if (cloudSaveTimerRef.current) window.clearTimeout(cloudSaveTimerRef.current);
-
-    setCloudSyncStatus("saving");
-    setCloudSyncError("");
-    cloudSaveTimerRef.current = window.setTimeout(() => {
-      saveCloudBackup({ records, weeklySummaries, backupMetadata }, syncToken)
-        .then(() => {
-          setCloudSyncStatus("saved");
-        })
-        .catch((error) => {
-          setCloudSyncStatus("error");
-          setCloudSyncError(error instanceof Error ? error.message : "云端数据保存失败");
-        });
-    }, 700);
-
-    return () => {
-      if (cloudSaveTimerRef.current) window.clearTimeout(cloudSaveTimerRef.current);
-    };
-  }, [backupMetadata, cloudSyncEnabled, cloudSyncReady, records, syncToken, weeklySummaries]);
+  }, [isPublishedView]);
 
   const academicWeeks = useMemo(() => getAcademicWeeks(), []);
 
@@ -292,6 +257,7 @@ function App() {
   }, [records, selectedMonth]);
 
   function handleSave(draft: DraftRecord, editingId?: string) {
+    if (isPublishedView) return;
     const now = new Date().toISOString();
     if (editingId) {
       setRecords((current) =>
@@ -327,11 +293,13 @@ function App() {
   }
 
   function handleEdit(record: WorkRecord) {
+    if (isPublishedView) return;
     setEditingRecord(record);
     setActiveView("create");
   }
 
   function handleDelete(id: string) {
+    if (isPublishedView) return;
     const record = records.find((item) => item.id === id);
     if (!record) return;
     if (!window.confirm(`确认删除“${record.title}”吗？`)) return;
@@ -340,6 +308,7 @@ function App() {
   }
 
   function handleComplete(id: string) {
+    if (isPublishedView) return;
     const now = new Date().toISOString();
     setRecords((current) =>
       current.map((record) => (record.id === id ? { ...record, status: "已完成", updatedAt: now } : record)),
@@ -347,6 +316,7 @@ function App() {
   }
 
   function handleGenerateCourseSchedule() {
+    if (isPublishedView) return;
     const now = new Date().toISOString();
     let addedCount = 0;
     setRecords((current) => {
@@ -376,28 +346,8 @@ function App() {
     saveBackupMetadata(nextBackupMetadata);
   }
 
-  async function handleUploadLocalToCloud() {
-    const nextBackupMetadata: BackupMetadata = {
-      lastBackupAt: new Date().toISOString(),
-      recordCount: records.length,
-      weeklySummaryCount: countWeeklySummaries(weeklySummaries),
-    };
-
-    try {
-      setCloudSyncStatus("saving");
-      setCloudSyncError("");
-      await saveCloudBackupToEndpoint({ records, weeklySummaries, backupMetadata: nextBackupMetadata }, syncToken, onlineApiUrl);
-      setBackupMetadata(nextBackupMetadata);
-      saveBackupMetadata(nextBackupMetadata);
-      setCloudSyncStatus("saved");
-      window.alert("本地数据已上传到线上。请刷新线上页面查看。");
-    } catch (error) {
-      setCloudSyncStatus("error");
-      setCloudSyncError(error instanceof Error ? error.message : "上传到线上失败");
-    }
-  }
-
   async function handleImport(file: File) {
+    if (isPublishedView) return;
     try {
       const text = await file.text();
       const imported = JSON.parse(text);
@@ -451,10 +401,18 @@ function App() {
 
   function renderDashboard() {
     const hasSavedData = records.length > 0 || countWeeklySummaries(weeklySummaries) > 0;
-    const shouldRemindBackup = hasSavedData && (!backupMetadata || getDaysSince(backupMetadata.lastBackupAt) >= 7);
+    const shouldRemindBackup = !isPublishedView && hasSavedData && (!backupMetadata || getDaysSince(backupMetadata.lastBackupAt) >= 7);
 
     return (
       <>
+        {isPublishedView && snapshotStatus !== "ready" && (
+          <section className="backup-reminder">
+            <div>
+              <strong>{getSnapshotStatusLabel(snapshotStatus)}</strong>
+              <span>{snapshotStatus === "missing" ? "本地导出的 JSON 快照发布后，线上展示页会显示对应记录。" : snapshotError || "请稍候。"}</span>
+            </div>
+          </section>
+        )}
         {shouldRemindBackup && (
           <section className="backup-reminder">
             <div>
@@ -649,20 +607,22 @@ function App() {
               <textarea
                 value={summary}
                 onChange={(event) =>
+                  !isPublishedView &&
                   setWeeklySummaries((current) => ({
                     ...current,
                     [selectedWeek.id]: event.target.value,
                   }))
                 }
+                readOnly={isPublishedView}
                 rows={6}
-                placeholder="记录本周完成情况、遇到的问题、下周计划..."
+                placeholder={isPublishedView ? "线上展示页不编辑周总结" : "记录本周完成情况、遇到的问题、下周计划..."}
               />
             </label>
           </section>
 
           <div className="week-days-heading">
             <h3>每日事项概览</h3>
-            <span>简略显示，点击事项可进入编辑</span>
+            <span>{isPublishedView ? "线上展示页为只读快照" : "简略显示，点击事项可进入编辑"}</span>
           </div>
           <div className="week-grid compact-week-grid">
             {days.map((day) => (
@@ -678,7 +638,13 @@ function App() {
                     <span className="day-empty">暂无安排</span>
                   ) : (
                     day.records.slice(0, 4).map((record) => (
-                      <button className={`day-brief-item ${getRecordTypeClass(record.type)}`} type="button" key={record.id} onClick={() => handleEdit(record)}>
+                      <button
+                        className={`day-brief-item ${getRecordTypeClass(record.type)}`}
+                        type="button"
+                        key={record.id}
+                        onClick={() => handleEdit(record)}
+                        disabled={isPublishedView}
+                      >
                         <span>{record.title}</span>
                       </button>
                     ))
@@ -726,7 +692,13 @@ function App() {
                 <small>{calculateAcademicWeek(cell.date)}</small>
               </div>
               {cell.records.slice(0, 3).map((record) => (
-                <button className={`calendar-record ${getRecordTypeClass(record.type)}`} type="button" key={record.id} onClick={() => handleEdit(record)}>
+                <button
+                  className={`calendar-record ${getRecordTypeClass(record.type)}`}
+                  type="button"
+                  key={record.id}
+                  onClick={() => handleEdit(record)}
+                  disabled={isPublishedView}
+                >
                   {record.title}
                 </button>
               ))}
@@ -747,7 +719,7 @@ function App() {
           </div>
           <span>{ideaRecords.length} 条</span>
         </div>
-        <RecordList records={ideaRecords} emptyText="还没有灵感" onEdit={handleEdit} onDelete={handleDelete} onComplete={handleComplete} />
+        <RecordList records={ideaRecords} emptyText="还没有灵感" onEdit={handleEdit} onDelete={handleDelete} onComplete={handleComplete} readOnly={isPublishedView} />
       </section>
     );
   }
@@ -795,69 +767,50 @@ function App() {
             <strong>{backupMetadata ? formatDateTime(backupMetadata.lastBackupAt) : "尚未备份"}</strong>
           </div>
           <div>
-            <span>云端同步</span>
-            <strong>{getCloudSyncLabel(cloudSyncStatus)}</strong>
+            <span>当前模式</span>
+            <strong>{getSnapshotStatusLabel(snapshotStatus)}</strong>
           </div>
         </div>
-        <div className="settings-actions">
-          <button className="primary-button" type="button" onClick={handleExport}>
-            导出备份 JSON
-          </button>
-          <button className="ghost-button" type="button" onClick={() => importInputRef.current?.click()}>
-            导入备份 JSON
-          </button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept="application/json"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void handleImport(file);
-            }}
-          />
+        {!isPublishedView && (
+          <div className="settings-actions">
+            <button className="primary-button" type="button" onClick={handleExport}>
+              导出备份 JSON
+            </button>
+            <button className="ghost-button" type="button" onClick={() => importInputRef.current?.click()}>
+              导入备份 JSON
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleImport(file);
+              }}
+            />
+          </div>
+        )}
+        {snapshotError && <div className="snapshot-error">{snapshotError}</div>}
+        <div className="sync-note">
+          <h3>{isPublishedView ? "线上展示页" : "本地编辑与发布快照"}</h3>
+          {isPublishedView ? (
+            <p>当前页面只展示随项目发布的 workbench-data.json 快照，不在这里新增、修改或删除记录。</p>
+          ) : (
+            <p>当前页面是正式记录入口。需要更新线上展示时，先导出备份 JSON，再把这份文件作为项目的展示快照发布。</p>
+          )}
         </div>
-        <label className="sync-token-field">
-          <span>同步口令</span>
-          <input
-            type="password"
-            value={syncToken}
-            onChange={(event) => setSyncToken(event.target.value)}
-            placeholder="如 Vercel 设置了同步口令，请在这里填写"
-          />
-        </label>
-        {cloudSyncError && <div className="sync-error">{cloudSyncError}</div>}
-        {!cloudSyncEnabled && (
-          <div className="local-upload-panel">
+        {!isPublishedView && (
+          <div className="course-schedule-panel">
             <div>
-              <h3>把当前本地数据上传到线上</h3>
-              <p>在本地页面点击上传后，线上页面刷新即可读取同一份记录。</p>
-              <label>
-                <span>线上同步接口</span>
-                <input value={onlineApiUrl} onChange={(event) => setOnlineApiUrl(event.target.value)} />
-              </label>
+              <h3>课程安排</h3>
+              <p>生成期货投资分析和经济学原理的 15-17 周上课记录；后续调课可在记录里直接编辑日期、大节或备注。</p>
             </div>
-            <button className="primary-button" type="button" onClick={() => void handleUploadLocalToCloud()}>
-              上传当前数据到线上
+            <button className="primary-button" type="button" onClick={handleGenerateCourseSchedule}>
+              生成课程安排
             </button>
           </div>
         )}
-        <div className="sync-note">
-          <h3>本地和线上数据同步</h3>
-          <p>
-            本地页面的数据不能被线上网址直接读取。首次迁移时，请先在 http://127.0.0.1:5173/ 导出备份 JSON，
-            再到线上页面导入；导入成功后，线上页面的新记录会自动保存到云端。
-          </p>
-        </div>
-        <div className="course-schedule-panel">
-          <div>
-            <h3>课程安排</h3>
-            <p>生成期货投资分析和经济学原理的 15-17 周上课记录；后续调课可在记录里直接编辑日期、大节或备注。</p>
-          </div>
-          <button className="primary-button" type="button" onClick={handleGenerateCourseSchedule}>
-            生成课程安排
-          </button>
-        </div>
         <div className="calendar-rules">
           <h3>校历规则</h3>
           <p>2026年6月9日为本学期第15周，第17周后进入暑假；2026年6月25日至9月6日显示为“暑假”。</p>
@@ -872,7 +825,7 @@ function App() {
     if (activeView === "week") return renderWeekView();
     if (activeView === "calendar") return renderCalendarView();
     if (activeView === "ideas") return renderIdeas();
-    if (activeView === "create") return renderCreateView();
+    if (activeView === "create") return isPublishedView ? renderDashboard() : renderCreateView();
     if (activeView === "settings") return renderSettings();
     return (
       <section className="panel">
@@ -882,7 +835,7 @@ function App() {
           </div>
         </div>
         <Filters filters={filters} weeks={weeks} onChange={setFilters} />
-        <RecordList records={filteredRecords} onEdit={handleEdit} onDelete={handleDelete} onComplete={handleComplete} />
+        <RecordList records={filteredRecords} onEdit={handleEdit} onDelete={handleDelete} onComplete={handleComplete} readOnly={isPublishedView} />
       </section>
     );
   }
@@ -902,7 +855,7 @@ function App() {
           <strong>公司金融 / 期货 / 投行</strong>
         </div>
         <nav>
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.filter((item) => !isPublishedView || item.key !== "create").map((item) => (
             <button
               className={activeView === item.key ? "active" : ""}
               key={item.key}
@@ -921,12 +874,12 @@ function App() {
       <main className="main-area">
         <header className="topbar">
           <div>
-            <p>今天</p>
+            <p>{isPublishedView ? "线上展示快照" : "今天"}</p>
             <h1>
               {formatChineseDate(todayValue)} · {getWeekday(todayValue)} · {currentWeek}
             </h1>
           </div>
-          {activeView !== "dashboard" && (
+          {!isPublishedView && activeView !== "dashboard" && (
             <button
               className="primary-button"
               type="button"

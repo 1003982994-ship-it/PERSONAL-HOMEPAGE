@@ -1122,6 +1122,11 @@ textarea:focus {
   background: var(--accent-soft);
 }
 
+.calendar-record:disabled,
+.day-brief-item:disabled {
+  cursor: default;
+}
+
 .type-class {
   --type-color: #0b43c6;
   --type-bg: #eaf1ff;
@@ -1236,15 +1241,7 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
-.sync-token-field {
-  margin: 14px 0 0;
-}
-
-.sync-token-field input {
-  max-width: 520px;
-}
-
-.sync-error {
+.snapshot-error {
   margin-top: 10px;
   border: 1px solid #fecaca;
   border-radius: 8px;
@@ -1253,37 +1250,6 @@ textarea:focus {
   background: #fef2f2;
   font-size: 13px;
   line-height: 1.5;
-}
-
-.local-upload-panel {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-end;
-  margin-top: 16px;
-  border: 1px solid #bbf7d0;
-  border-radius: 8px;
-  padding: 14px;
-  background: #f0fdf4;
-}
-
-.local-upload-panel h3,
-.local-upload-panel p {
-  margin: 0;
-}
-
-.local-upload-panel h3 {
-  font-size: 16px;
-}
-
-.local-upload-panel p {
-  margin-top: 6px;
-  color: var(--muted);
-  line-height: 1.55;
-}
-
-.local-upload-panel label {
-  margin: 12px 0 0;
 }
 
 .sync-note {
