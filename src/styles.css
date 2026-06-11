@@ -1236,6 +1236,45 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.sync-token-field {
+  margin: 14px 0 0;
+}
+
+.sync-token-field input {
+  max-width: 520px;
+}
+
+.sync-error {
+  margin-top: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #991b1b;
+  background: #fef2f2;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sync-note {
+  margin-top: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 14px;
+  color: #1d2939;
+  background: #eff6ff;
+}
+
+.sync-note h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.sync-note p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .course-schedule-panel {
   display: flex;
   justify-content: space-between;
@@ -1261,7 +1300,7 @@ textarea:focus {
 
 .backup-status-grid {
   display: grid;
-  grid-template-columns: 160px 160px minmax(260px, 1fr);
+  grid-template-columns: 150px 150px minmax(220px, 1fr) minmax(180px, 0.8fr);
   gap: 12px;
   margin-bottom: 16px;
 }

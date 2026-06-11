@@ -10,10 +10,22 @@ import type { BackupMetadata, RecordFilters, ViewKey, WeeklySummaries, WorkRecor
 import { calculateAcademicWeek, getAcademicWeekInfoForDate, getAcademicWeeks } from "./utils/academicCalendar";
 import { COURSE_SCHEDULE_PRESETS, buildCourseScheduleRecord, getCourseScheduleKey } from "./utils/courseSchedule";
 import { addDays, endOfWeek, formatChineseDate, getWeekday, isDateWithin, isSameDay, parseLocalDate, startOfWeek, toDateInputValue } from "./utils/date";
-import { loadBackupMetadata, loadRecords, loadWeeklySummaries, saveBackupMetadata, saveRecords, saveWeeklySummaries } from "./utils/storage";
+import {
+  loadBackupMetadata,
+  loadCloudBackup,
+  loadRecords,
+  loadSyncToken,
+  loadWeeklySummaries,
+  saveBackupMetadata,
+  saveCloudBackup,
+  saveRecords,
+  saveSyncToken,
+  saveWeeklySummaries,
+} from "./utils/storage";
 import { getRecordTypeClass } from "./utils/recordStyle";
 
 type DraftRecord = Omit<WorkRecord, "id" | "createdAt" | "updatedAt">;
+type CloudSyncStatus = "local" | "loading" | "ready" | "saving" | "saved" | "error";
 
 const todayValue = toDateInputValue(new Date());
 const currentWeek = calculateAcademicWeek(todayValue);
@@ -54,6 +66,20 @@ function recordMatchesKeyword(record: WorkRecord, keyword: string): boolean {
 
 function countWeeklySummaries(summaries: WeeklySummaries): number {
   return Object.values(summaries).filter((summary) => summary.trim().length > 0).length;
+}
+
+function shouldUseCloudSync(): boolean {
+  if (typeof window === "undefined") return false;
+  return !["localhost", "127.0.0.1"].includes(window.location.hostname);
+}
+
+function getCloudSyncLabel(status: CloudSyncStatus): string {
+  if (status === "local") return "本地模式";
+  if (status === "loading") return "正在读取云端";
+  if (status === "ready") return "云端已连接";
+  if (status === "saving") return "正在保存云端";
+  if (status === "saved") return "云端已保存";
+  return "云端同步异常";
 }
 
 function formatDateTime(value: string): string {
@@ -142,12 +168,18 @@ function App() {
   const [records, setRecords] = useState<WorkRecord[]>(() => sortRecords(loadRecords()));
   const [weeklySummaries, setWeeklySummaries] = useState<WeeklySummaries>(() => loadWeeklySummaries());
   const [backupMetadata, setBackupMetadata] = useState<BackupMetadata | null>(() => loadBackupMetadata());
+  const [syncToken, setSyncToken] = useState(() => loadSyncToken());
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>(() => (shouldUseCloudSync() ? "loading" : "local"));
+  const [cloudSyncError, setCloudSyncError] = useState("");
+  const [cloudSyncReady, setCloudSyncReady] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [filters, setFilters] = useState<RecordFilters>(initialFilters);
   const [editingRecord, setEditingRecord] = useState<WorkRecord | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(todayValue.slice(0, 7));
   const [selectedWeekId, setSelectedWeekId] = useState(currentWeekInfo.id);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const cloudSaveTimerRef = useRef<number | null>(null);
+  const cloudSyncEnabled = useMemo(() => shouldUseCloudSync(), []);
 
   useEffect(() => {
     saveRecords(records);
@@ -156,6 +188,64 @@ function App() {
   useEffect(() => {
     saveWeeklySummaries(weeklySummaries);
   }, [weeklySummaries]);
+
+  useEffect(() => {
+    saveSyncToken(syncToken);
+  }, [syncToken]);
+
+  useEffect(() => {
+    if (!cloudSyncEnabled) return;
+
+    let cancelled = false;
+    setCloudSyncReady(false);
+    setCloudSyncStatus("loading");
+    setCloudSyncError("");
+
+    loadCloudBackup(syncToken)
+      .then((backup) => {
+        if (cancelled) return;
+        if (backup) {
+          setRecords(sortRecords(backup.records));
+          setWeeklySummaries(backup.weeklySummaries);
+          setBackupMetadata(backup.backupMetadata);
+          if (backup.backupMetadata) saveBackupMetadata(backup.backupMetadata);
+        }
+        setCloudSyncReady(true);
+        setCloudSyncStatus("ready");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCloudSyncReady(false);
+        setCloudSyncStatus("error");
+        setCloudSyncError(error instanceof Error ? error.message : "云端数据读取失败");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cloudSyncEnabled, syncToken]);
+
+  useEffect(() => {
+    if (!cloudSyncEnabled || !cloudSyncReady) return;
+    if (cloudSaveTimerRef.current) window.clearTimeout(cloudSaveTimerRef.current);
+
+    setCloudSyncStatus("saving");
+    setCloudSyncError("");
+    cloudSaveTimerRef.current = window.setTimeout(() => {
+      saveCloudBackup({ records, weeklySummaries, backupMetadata }, syncToken)
+        .then(() => {
+          setCloudSyncStatus("saved");
+        })
+        .catch((error) => {
+          setCloudSyncStatus("error");
+          setCloudSyncError(error instanceof Error ? error.message : "云端数据保存失败");
+        });
+    }, 700);
+
+    return () => {
+      if (cloudSaveTimerRef.current) window.clearTimeout(cloudSaveTimerRef.current);
+    };
+  }, [backupMetadata, cloudSyncEnabled, cloudSyncReady, records, syncToken, weeklySummaries]);
 
   const academicWeeks = useMemo(() => getAcademicWeeks(), []);
 
@@ -680,6 +770,10 @@ function App() {
             <span>上次备份</span>
             <strong>{backupMetadata ? formatDateTime(backupMetadata.lastBackupAt) : "尚未备份"}</strong>
           </div>
+          <div>
+            <span>云端同步</span>
+            <strong>{getCloudSyncLabel(cloudSyncStatus)}</strong>
+          </div>
         </div>
         <div className="settings-actions">
           <button className="primary-button" type="button" onClick={handleExport}>
@@ -698,6 +792,23 @@ function App() {
               if (file) void handleImport(file);
             }}
           />
+        </div>
+        <label className="sync-token-field">
+          <span>同步口令</span>
+          <input
+            type="password"
+            value={syncToken}
+            onChange={(event) => setSyncToken(event.target.value)}
+            placeholder="如 Vercel 设置了同步口令，请在这里填写"
+          />
+        </label>
+        {cloudSyncError && <div className="sync-error">{cloudSyncError}</div>}
+        <div className="sync-note">
+          <h3>本地和线上数据同步</h3>
+          <p>
+            本地页面的数据不能被线上网址直接读取。首次迁移时，请先在 http://127.0.0.1:5173/ 导出备份 JSON，
+            再到线上页面导入；导入成功后，线上页面的新记录会自动保存到云端。
+          </p>
         </div>
         <div className="course-schedule-panel">
           <div>
