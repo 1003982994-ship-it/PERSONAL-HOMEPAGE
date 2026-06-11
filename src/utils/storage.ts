@@ -95,8 +95,8 @@ export async function loadCloudBackup(syncToken: string): Promise<WorkbenchBacku
   };
 }
 
-export async function saveCloudBackup(backup: WorkbenchBackup, syncToken: string): Promise<void> {
-  const response = await fetch("/api/workbench", {
+export async function saveCloudBackupToEndpoint(backup: WorkbenchBackup, syncToken: string, endpoint = "/api/workbench"): Promise<void> {
+  const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -109,4 +109,8 @@ export async function saveCloudBackup(backup: WorkbenchBackup, syncToken: string
     const message = await response.text();
     throw new Error(message || "云端数据保存失败");
   }
+}
+
+export async function saveCloudBackup(backup: WorkbenchBackup, syncToken: string): Promise<void> {
+  return saveCloudBackupToEndpoint(backup, syncToken);
 }

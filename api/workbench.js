@@ -37,7 +37,22 @@ function normalizeBackup(body) {
   };
 }
 
+function setCorsHeaders(req, res) {
+  const origin = req.headers.origin || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.setHeader("Vary", "Origin");
+}
+
 export default async function handler(req, res) {
+  setCorsHeaders(req, res);
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
   if (!hasCloudStore()) {
     res.status(503).send("云端存储尚未配置。请在 Vercel 项目中添加 KV 数据库后重新部署。");
     return;

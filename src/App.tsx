@@ -18,6 +18,7 @@ import {
   loadWeeklySummaries,
   saveBackupMetadata,
   saveCloudBackup,
+  saveCloudBackupToEndpoint,
   saveRecords,
   saveSyncToken,
   saveWeeklySummaries,
@@ -30,6 +31,7 @@ type CloudSyncStatus = "local" | "loading" | "ready" | "saving" | "saved" | "err
 const todayValue = toDateInputValue(new Date());
 const currentWeek = calculateAcademicWeek(todayValue);
 const currentWeekInfo = getAcademicWeekInfoForDate(todayValue);
+const DEFAULT_ONLINE_API_URL = "https://personal-homepage-omega-blush.vercel.app/api/workbench";
 
 const initialFilters: RecordFilters = {
   date: "",
@@ -172,6 +174,7 @@ function App() {
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>(() => (shouldUseCloudSync() ? "loading" : "local"));
   const [cloudSyncError, setCloudSyncError] = useState("");
   const [cloudSyncReady, setCloudSyncReady] = useState(false);
+  const [onlineApiUrl, setOnlineApiUrl] = useState(DEFAULT_ONLINE_API_URL);
   const [activeView, setActiveView] = useState<ViewKey>("dashboard");
   const [filters, setFilters] = useState<RecordFilters>(initialFilters);
   const [editingRecord, setEditingRecord] = useState<WorkRecord | null>(null);
@@ -371,6 +374,27 @@ function App() {
     URL.revokeObjectURL(url);
     setBackupMetadata(nextBackupMetadata);
     saveBackupMetadata(nextBackupMetadata);
+  }
+
+  async function handleUploadLocalToCloud() {
+    const nextBackupMetadata: BackupMetadata = {
+      lastBackupAt: new Date().toISOString(),
+      recordCount: records.length,
+      weeklySummaryCount: countWeeklySummaries(weeklySummaries),
+    };
+
+    try {
+      setCloudSyncStatus("saving");
+      setCloudSyncError("");
+      await saveCloudBackupToEndpoint({ records, weeklySummaries, backupMetadata: nextBackupMetadata }, syncToken, onlineApiUrl);
+      setBackupMetadata(nextBackupMetadata);
+      saveBackupMetadata(nextBackupMetadata);
+      setCloudSyncStatus("saved");
+      window.alert("本地数据已上传到线上。请刷新线上页面查看。");
+    } catch (error) {
+      setCloudSyncStatus("error");
+      setCloudSyncError(error instanceof Error ? error.message : "上传到线上失败");
+    }
   }
 
   async function handleImport(file: File) {
@@ -803,6 +827,21 @@ function App() {
           />
         </label>
         {cloudSyncError && <div className="sync-error">{cloudSyncError}</div>}
+        {!cloudSyncEnabled && (
+          <div className="local-upload-panel">
+            <div>
+              <h3>把当前本地数据上传到线上</h3>
+              <p>在本地页面点击上传后，线上页面刷新即可读取同一份记录。</p>
+              <label>
+                <span>线上同步接口</span>
+                <input value={onlineApiUrl} onChange={(event) => setOnlineApiUrl(event.target.value)} />
+              </label>
+            </div>
+            <button className="primary-button" type="button" onClick={() => void handleUploadLocalToCloud()}>
+              上传当前数据到线上
+            </button>
+          </div>
+        )}
         <div className="sync-note">
           <h3>本地和线上数据同步</h3>
           <p>
